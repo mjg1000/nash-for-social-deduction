@@ -1,0 +1,44 @@
+1 night werewolf
+Roles:
+In order of simplicity to implement
+Werewolf 
+Villager
+Tanner
+Insomniac* (depending on how many roles they could be)
+Hunter
+Drunk
+Troublemaker
+Mason
+Minion
+Robber 
+Seer
+Doppelganger
+
+Players: 3
+Roles used:
+Werewolf x2 
+Villager 
+Troublemaker
+Insomniac
+
+Actions:
+Assert has a claim to make
+Set happy to vote
+UnSet happy to vote 
+
+Claim role dealt
+- Claim swapped (trouble maker)
+- Claim didn't swap
+- Claim was swapped (insomniac)
+- Claim was not swapped 
+ 
+Claim current role 
+Retract claim role dealt
+Retract claim current role 
+
+Vote to all draw* (is this actually needed?)
+Request player make claim*
+Deny request* 
+
+Voting:
+Vote for player
