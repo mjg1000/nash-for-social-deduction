@@ -42,74 +42,121 @@ class Node():
         pass
     def cfr(self, prev_grid = -1):
         """
-        Strategy
-        At each node, update the current frequencies for which every ijk state is reached from the parent ijk+action node 
-
-        for each action for each ijk state, update it's frequency by multiplying by the assosciated frequence for any i-state
-
-        to get the e.v. for each infoset in the node (each i-state), normalise the action-ijk states for all action-ijk states which are elements of the current i-state. This means that we don't care about the frequency that this i-state reaches this ijk+node state, and just assume it has and compute e.v.s based of this. 
-
-        for each child node (corresponding to an action), update each ijk state from the current node ijk state frequency * the frequency of which the action corresponding to the child node is chosen (based of the i-state)
-        """
-        if prev_grid == -1: #root
+        Perform one CFR traversal of this node.
+        
+        Computes:
+        - (i,j,k)-state EVs: EV when current=i, next=j, after=k
+        - I-state EVs: EV for current player's type i (marginalized over j,k)
+        - Action EVs: EV of each action for each I-state
+        
+        Args:
+            prev_grid: Frequency grid from parent node
+        """    
+        # Initialize at root
+        if prev_grid == -1:
             prev_grid = self.generate_correlations()
         
-        # [1] = cumulative probability for every action. [0][i] = this player has start i. [i][j] =e.v.s when next player has start j. [i][j][k] = [e.vs when player after has start k, cumulative e.v over all actions, p(next_player = j & player after = k | current player is i)]. [i][j][k][0][z] = [prob, ev, ] when the action taken is z. prob = p(with this start we chose action z)*p(next_player = j & player after = k | current player is i)   
+        # ev_grid[0][i][j][k] = [(i,j,k)-state data]
+        # ev_grid[0][i][j][k][0] = {action_node: [freq, ev]}
+        # ev_grid[0][i][j][k][1] = (i,j,k)-state EV
+        # ev_grid[0][i][j][k][2] = conditional prob from parent
+        # ev_grid[1][i] = total frequency for I-state i (for normalization)
         ev_grid = [{}, {i:0 for i in STARTS}]
+
+        # Propagate frequencies from parent to current node
         for start_idx, i in enumerate(STARTS):
             ev_grid[0][i] = {}
             for j in STARTS:
                 ev_grid[0][i][j] = {}
                 for k in STARTS:
-                    sub_dict = {}
-                    for action in self.children[start_idx]:
-                        conditional_prob = prev_grid[0][k][i][j][0][self][0] # frequency that we get to the i,j,k state *ON CURRENT NODE*. p(get to this node on the i,j,k path)/p(get to this node on any path) - should now be the relative likelihood of this (i,j,k) considering we are at this node.
+                    # Get frequency of (i,j,k) state from parent
+                    # Parent's (k,i,j) maps to current's (i,j,k) due to player rotation
+                    conditional_prob = prev_grid[0][k][i][j][0][self][0]
                     
-                        sub_dict[action[0]] = [action[1]*conditional_prob, 0.0] # Now need to normalise this across all other same i states so that the E.V for an I-state is correct.
+                    # Compute action frequencies for this (i,j,k) state
+                    action_dict = {}
+                    for action in self.children[start_idx]:
+                        action_node = action[0]
+                        strategy_prob = action[1]  # Current strategy for I-state i
+                        
+                        # Frequency = strategy_prob * incoming_frequency
+                        freq = strategy_prob * conditional_prob
+                        action_dict[action_node] = [freq, 0.0]  # [frequency, EV]
+                    
                     ev_grid[0][i][j][k] = [
-                        sub_dict,
-                        0.0,  # cumulative EV for this (i,j,k) state
-                        conditional_prob   # P(j, k | i)
+                        action_dict,
+                        0.0,               # (i,j,k)-state EV (computed later)
+                        conditional_prob   # Incoming frequency
                     ]
-                    ev_grid[1][i] += conditional_prob # ready to normalise for each I
+                    
+                    # Accumulate total frequency for I-state i
+                    ev_grid[1][i] += conditional_prob
 
         
-        for i in self.children[0][0]:
-            i[0].cfr(ev_grid) # recurses down the tree until reaching terminal nodes. This correctly assigns all frequencies in all nodes
+        # Recurse on all children
+        for action in self.children[0]:
+            action[0].cfr(ev_grid)
 
+        # Backpropagate: compute (i,j,k)-state EVs from children
         for i in ev_grid[0]:
             for j in ev_grid[0][i]:
                 for k in ev_grid[0][i][j]:
-                    ijk_ev = 0
-                    total_freq = 0
-                    for action_node in ev_grid[0][i][j][k][0]:
-                        ev_grid[0][i][j][k][0][action_node][1] = action_node.ev_grid[0][j][k][i][1] # child computed e.v. for same global game state # This should be the e.v. of ijk state always taking action z
-                        freq =  ev_grid[0][i][j][k][0][action_node][0] # frequency we take this action
-                        ijk_ev += action_node.ev_grid[0][j][k][i][1]*freq
+                    ijk_ev = 0.0
+                    total_freq = 0.0
+                    
+                    for action_node, action_data in ev_grid[0][i][j][k][0].items():
+                        # Get child's EV (with rotated indices: i,j,k → j,k,i)
+                        child_ev = action_node.ev_grid[0][j][k][i][1]
+                        action_data[1] = child_ev
+                        
+                        # Accumulate weighted EV
+                        freq = action_data[0]
+                        ijk_ev += child_ev * freq
                         total_freq += freq
-                        # Now create the probabilities for this point in the e.v. grid 
-                        # total p = p(action_z | node_infoset_i) * p(next_player_start = j & player_after_that_start = k | node_infoset_i)
-                        # sum all p across start i = 1 (underlying assumption)
-                    ev_grid[0][i][j][k][1] = ijk_ev/total_freq 
+                    
+                    # (i,j,k)-state EV is weighted average over actions
+                    if total_freq > 0:
+                        ev_grid[0][i][j][k][1] = ijk_ev / total_freq
         
-        # Normalised e.vs
+        # Compute I-state EVs and action EVs (marginalized over j,k)
         strategy_evs = {}
+        
         for i in STARTS:
-            current_ev = 0
-            action_evs = {action[0]:[0,0] for action in self.children[0]}
+            i_state_ev = 0.0
+            action_evs = {action[0]: [0.0, 0.0] for action in self.children[0]}
+            
             for j in STARTS:
                 for k in STARTS:
-                    for action in self.children[0]:
-                        ev_grid[0][i][j][k][0][action[0]].append(ev_grid[0][i][j][k][0][action[0]][0]/ev_grid[1][i]) # Normalised frequency to calculate strategy E.V
-                        current_ev += (ev_grid[0][i][j][k][0][action[0]][0]/ev_grid[1][i])*ev_grid[0][i][j][k][0][action[0]][1]
-
-                        freq =   ev_grid[0][i][j][k][0][action[0]][0] # frequency we take this action
-                        action_evs[action[0]][0] += ev_grid[0][i][j][k][0][action[0]][1]*freq # action ev if taking pure scaled by likelihood of being in this jk world
-                        action_evs[i][1] += freq
-            for act in action_evs:
-                action_evs[act][0] /= action_evs[act][1]        
-            strategy_evs[i] = [current_ev, copy.deepcopy(action_evs)] # [strategy ev, ev if taking given action pure]
-
+                    if k not in ev_grid[0][i][j]:
+                        continue
+                    
+                    for action_node, action_data in ev_grid[0][i][j][k][0].items():
+                        freq = action_data[0]
+                        action_ev = action_data[1]
+                        
+                        # Normalized frequency for I-state EV
+                        if ev_grid[1][i] > 0:
+                            normalized_freq = freq / ev_grid[1][i]
+                        else:
+                            normalized_freq = 0.0
+                        
+                        # Accumulate I-state EV (marginalized over j,k and actions)
+                        i_state_ev += normalized_freq * action_ev
+                        
+                        # Accumulate action EV (marginalized over j,k only)
+                        action_evs[action_node][0] += action_ev * freq
+                        action_evs[action_node][1] += freq
+            
+            # Normalize action EVs
+            for action_node in action_evs:
+                if action_evs[action_node][1] > 0:
+                    action_evs[action_node][0] /= action_evs[action_node][1]
+            
+            # Store: [I-state EV, {action_node: [action_EV, total_freq]}]
+            strategy_evs[i] = [i_state_ev, action_evs]
+        # Store results
+        self.ev_grid = ev_grid
+        self.strategy_evs = strategy_evs
 
     def mccfr(self):
         pass
